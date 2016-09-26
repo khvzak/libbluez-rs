@@ -1,0 +1,13 @@
+[package]
+name = "bluez-rs"
+version = "0.1.0"
+authors = ["Aleksandr Orlenko <zxteam@gmail.com>"]
+repository = "https://github.com/khvzak/libbluez-rs.git"
+keywords = ["bluez", "bluetooth"]
+license = "MIT"
+
+[lib]
+name = "bluez"
+
+[dependencies]
+dbus = "0.4"
