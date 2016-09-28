@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 
 use dbus;
 
+use adapter;
 use common;
 use error::BtError;
 
-static DEVICE_INTERFACE: &'static str = "org.bluez.Device1";
+pub static DEVICE_INTERFACE: &'static str = "org.bluez.Device1";
 
 #[derive(Clone, Debug)]
 pub struct Device {
@@ -34,8 +35,16 @@ pub struct DeviceProperties {
 }
 
 impl Device {
+    pub fn new(conn: Rc<dbus::Connection>, object_path: &str) -> Self {
+        Device { conn: conn, object_path: object_path.to_string() }
+    }
+
     pub fn object_path(&self) -> &str {
         &self.object_path
+    }
+
+    pub fn adapter_object_path(&self) -> &str {
+        self.object_path.rsplitn(2, '/').last().unwrap()
     }
 
     pub fn get_properties(&self) -> Result<DeviceProperties, BtError> {
@@ -111,4 +120,12 @@ impl DeviceProperties {
             rssi: _get_prop(&props_map, "RSSI"),
         }
     }
+}
+
+pub fn get_devices(adapter: &adapter::Adapter) -> Result<Vec<Device>, BtError> {
+    common::dbus_get_managed_objects(adapter.conn(),
+                                     adapter.object_path(),
+                                     DEVICE_INTERFACE,
+                                     |conn, obj_path| Device { conn: conn, object_path: obj_path.to_string() }
+    )
 }

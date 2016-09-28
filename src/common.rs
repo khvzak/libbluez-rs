@@ -1,8 +1,44 @@
+use std::rc::Rc;
+
 use dbus;
 
 use error::BtError;
 
 pub static SERVICE_NAME: &'static str = "org.bluez";
+
+pub fn dbus_get_managed_objects<T, F>(conn: Rc<dbus::Connection>,
+                                      path: &str,
+                                      iface: &str,
+                                      f: F) -> Result<Vec<T>, BtError> where F: Fn(Rc<dbus::Connection>, &str) -> T {
+    let mut path = path.to_string();
+    if !path.ends_with("/") { path.push_str("/"); }
+    let mut objects_vec = Vec::new();
+
+    let msg = try!(
+        dbus::Message::new_method_call(SERVICE_NAME, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
+            .map_err(BtError::DBusInternal)
+    );
+    let resp = try!(conn.send_with_reply_and_block(msg, 1000));
+    let objects = resp.get_items().pop().unwrap();
+    let objects: &[dbus::MessageItem] = objects.inner().unwrap();
+
+    for obj in objects {
+        let (obj_path, obj_ifaces) = obj.inner().unwrap();
+        let obj_path: &str = obj_path.inner().unwrap();
+        let obj_ifaces: &[dbus::MessageItem] = obj_ifaces.inner().unwrap();
+
+        for obj_iface in obj_ifaces {
+            let (obj_iface_name, _) = obj_iface.inner().unwrap();
+            let obj_iface_name: &str = obj_iface_name.inner().unwrap();
+
+            if obj_iface_name == iface && obj_path.starts_with(&path) {
+                objects_vec.push(f(conn.clone(), obj_path));
+            }
+        }
+    }
+
+    Ok(objects_vec)
+}
 
 pub fn dbus_get_property<'a, T>(conn: &dbus::Connection,
                            object_path: &str,

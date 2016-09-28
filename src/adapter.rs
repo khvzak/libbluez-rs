@@ -1,13 +1,14 @@
 use std::rc::Rc;
 use std::collections::{HashMap, BTreeMap};
+use std::time::{Duration, Instant};
 
 use dbus;
 
 use common;
-use device::Device;
+use device::{self, Device};
 use error::BtError;
 
-static ADAPTER_INTERFACE: &'static str = "org.bluez.Adapter1";
+pub static ADAPTER_INTERFACE: &'static str = "org.bluez.Adapter1";
 
 #[derive(Clone, Debug)]
 pub struct Adapter {
@@ -32,6 +33,10 @@ pub struct AdapterProperties {
 }
 
 impl Adapter {
+    pub fn conn(&self) -> Rc<dbus::Connection> {
+        self.conn.clone()
+    }
+
     pub fn object_path(&self) -> &str {
         &self.object_path
     }
@@ -70,6 +75,82 @@ impl Adapter {
     //
     pub fn start_discovery(&self) -> Result<(), BtError> {
         common::dbus_call_method0(&self.conn, &self.object_path, ADAPTER_INTERFACE, "StartDiscovery")
+    }
+
+    pub fn start_discovery_session<F>(&self, duration: u32, f: F) -> Result<(), BtError> where F: Fn(Device) -> () {
+        let conn = self.conn();
+
+        let filter1 = format!("sender='{}',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesAdded'", common::SERVICE_NAME);
+        let filter2 = format!("sender='{}',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", common::SERVICE_NAME);
+
+        try!(conn.add_match(&filter1));
+        try!(conn.add_match(&filter2));
+
+        try!(self.start_discovery());
+
+        let now = Instant::now();
+
+        'outer: for i in conn.iter(100) {
+            if let dbus::ConnectionItem::Signal(ref s) = i {
+                let member = s.member().unwrap();
+
+                if &*member == "PropertiesChanged" && &*s.path().unwrap() == self.object_path() {
+                    let items = s.get_items();
+
+                    let iface = items.get(0).unwrap();
+                    let iface: &str = iface.inner().unwrap();
+
+                    if iface == ADAPTER_INTERFACE {
+                        let props = items.get(1).unwrap();
+                        let props: &[dbus::MessageItem] = props.inner().unwrap();
+
+                        for p in props {
+                            let (name, val) = p.inner().unwrap();
+                            let name: &str = name.inner().unwrap();
+
+                            if name == "Discovering" {
+                                let val: bool = (val.inner() as Result<&dbus::MessageItem, ()>).unwrap().inner().unwrap();
+                                if !val {
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                else if &*member == "InterfacesAdded" {
+                    let items = s.get_items();
+
+                    let obj_path = items.get(0).unwrap();
+                    let obj_path: &str = obj_path.inner().unwrap();
+
+                    let dict = items.get(1).unwrap();
+                    let dict: &[dbus::MessageItem] = dict.inner().unwrap();
+
+                    for kv in dict {
+                        let (iface, _) = kv.inner().unwrap();
+                        let iface: &str = iface.inner().unwrap();
+
+                        if iface == device::DEVICE_INTERFACE {
+                            let device = Device::new(conn.clone(), obj_path);
+                            if device.adapter_object_path() == self.object_path() {
+                                f(device);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if duration > 0 && now.elapsed().as_secs() >= duration as u64 {
+                try!(self.stop_discovery());
+                break 'outer;
+            }
+        }
+
+        try!(conn.remove_match(&filter1));
+        try!(conn.remove_match(&filter2));
+
+        Ok(())
     }
 
     pub fn stop_discovery(&self) -> Result<(), BtError> {
@@ -112,40 +193,11 @@ impl AdapterProperties {
 }
 
 pub fn get_adapters(conn: Rc<dbus::Connection>) -> Result<Vec<Adapter>, BtError> {
-    let mut adapters: Vec<Adapter> = Vec::new();
-
-    let msg = try!(
-        dbus::Message::new_method_call(common::SERVICE_NAME, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
-            .map_err(BtError::DBusInternal)
-    );
-    let resp = try!(conn.send_with_reply_and_block(msg, 1000));
-    let objects = resp.get_items().pop().unwrap();
-    let objects: &[dbus::MessageItem] = objects.inner().unwrap();
-
-    fn _get_prop<'a, T>(props_map: &HashMap<&str, &'a dbus::MessageItem>, name: &str) -> Option<T>
-        where T: dbus::FromMessageItem<'a> {
-        props_map.get(name).and_then(|x| (x.inner() as Result<T, ()>).ok())
-    }
-
-    for obj in objects {
-        let (path, interfaces) = obj.inner().unwrap();
-        let path: &str = path.inner().unwrap();
-        let interfaces: &[dbus::MessageItem] = interfaces.inner().unwrap();
-
-        for interface in interfaces {
-            let (name, _) = interface.inner().unwrap();
-            let name: &str = name.inner().unwrap();
-
-            if name == ADAPTER_INTERFACE {
-                adapters.push(Adapter {
-                    conn: conn.clone(),
-                    object_path: path.to_string(),
-                });
-            }
-        }
-    }
-
-    Ok(adapters)
+    common::dbus_get_managed_objects(conn,
+                                     "/",
+                                     ADAPTER_INTERFACE,
+                                     |conn, obj_path| Adapter { conn: conn, object_path: obj_path.to_string() }
+    )
 }
 
 pub fn find_adapter(conn: Rc<dbus::Connection>, name_or_addr: Option<&str>) -> Result<Option<Adapter>, BtError> {
