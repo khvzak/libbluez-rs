@@ -22,6 +22,7 @@ impl Deref for Connection {
     }
 }
 
+pub mod agent;
 pub mod adapter;
 pub mod device;
 pub mod error;
