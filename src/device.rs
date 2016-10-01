@@ -1,9 +1,8 @@
-use std::rc::Rc;
 use std::collections::BTreeMap;
 
 use dbus;
 
-use adapter;
+use adapter::{self, Adapter};
 use common;
 use error::BtError;
 
@@ -11,7 +10,7 @@ pub static DEVICE_INTERFACE: &'static str = "org.bluez.Device1";
 
 #[derive(Clone, Debug)]
 pub struct Device {
-    conn: Rc<dbus::Connection>,
+    conn: super::Connection,
     object_path: String,
 }
 
@@ -35,8 +34,21 @@ pub struct DeviceProperties {
 }
 
 impl Device {
-    pub fn new(conn: Rc<dbus::Connection>, object_path: &str) -> Self {
-        Device { conn: conn, object_path: object_path.to_string() }
+    pub fn new(conn: &super::Connection, object_path: &str) -> Self {
+        Device { conn: conn.clone(), object_path: object_path.to_string() }
+    }
+
+    pub fn find(adapter: &Adapter, name_or_addr: &str) -> Result<Option<Self>, BtError> {
+        let devices = try!(get_devices(adapter));
+
+        for device in devices {
+            let p = try!(device.get_properties());
+            if p.address == name_or_addr || p.alias == name_or_addr || (p.name.is_some() && p.name.unwrap() == name_or_addr) {
+                return Ok(Some(device));
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn object_path(&self) -> &str {
@@ -47,6 +59,9 @@ impl Device {
         self.object_path.rsplitn(2, '/').last().unwrap()
     }
 
+    //
+    // Properties
+    //
     pub fn get_properties(&self) -> Result<DeviceProperties, BtError> {
         let p = dbus::Props::new(&self.conn, common::SERVICE_NAME, &self.object_path, DEVICE_INTERFACE, 1000);
         Ok(DeviceProperties::new(try!(p.get_all())))
@@ -90,6 +105,9 @@ impl Device {
     pub fn cancel_pairing(&self) -> Result<(), BtError> {
         common::dbus_call_method0(&self.conn, &self.object_path, DEVICE_INTERFACE, "CancelPairing")
     }
+
+    // TODO:
+    // pub fn connect_with_agent(&self, agent: Box<agent::Agent>) -> Result<(), BtError> {}
 }
 
 impl DeviceProperties {

@@ -1,6 +1,5 @@
-use std::rc::Rc;
-use std::collections::{HashMap, BTreeMap};
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
+use std::time::Instant;
 
 use dbus;
 
@@ -12,7 +11,7 @@ pub static ADAPTER_INTERFACE: &'static str = "org.bluez.Adapter1";
 
 #[derive(Clone, Debug)]
 pub struct Adapter {
-    conn: Rc<dbus::Connection>,
+    conn: super::Connection,
     object_path: String,
 }
 
@@ -33,14 +32,17 @@ pub struct AdapterProperties {
 }
 
 impl Adapter {
-    pub fn conn(&self) -> Rc<dbus::Connection> {
-        self.conn.clone()
+    pub fn conn(&self) -> &super::Connection {
+        &self.conn
     }
 
     pub fn object_path(&self) -> &str {
         &self.object_path
     }
 
+    //
+    // Properties
+    //
     pub fn get_properties(&self) -> Result<AdapterProperties, BtError> {
         let p = dbus::Props::new(&self.conn, common::SERVICE_NAME, &self.object_path, ADAPTER_INTERFACE, 1000);
         Ok(AdapterProperties::new(try!(p.get_all())))
@@ -77,7 +79,7 @@ impl Adapter {
         common::dbus_call_method0(&self.conn, &self.object_path, ADAPTER_INTERFACE, "StartDiscovery")
     }
 
-    pub fn start_discovery_session<F>(&self, duration: u32, f: F) -> Result<(), BtError> where F: Fn(Device) -> () {
+    pub fn start_discovery_session<F>(&self, duration: u32, mut f: F) -> Result<(), BtError> where F: FnMut(Device) -> () {
         let conn = self.conn();
 
         let filter1 = format!("sender='{}',interface='org.freedesktop.DBus.ObjectManager',member='InterfacesAdded'", common::SERVICE_NAME);
@@ -132,7 +134,7 @@ impl Adapter {
                         let iface: &str = iface.inner().unwrap();
 
                         if iface == device::DEVICE_INTERFACE {
-                            let device = Device::new(conn.clone(), obj_path);
+                            let device = Device::new(conn, obj_path);
                             if device.adapter_object_path() == self.object_path() {
                                 f(device);
                             }
@@ -192,15 +194,15 @@ impl AdapterProperties {
     }
 }
 
-pub fn get_adapters(conn: Rc<dbus::Connection>) -> Result<Vec<Adapter>, BtError> {
+pub fn get_adapters(conn: &super::Connection) -> Result<Vec<Adapter>, BtError> {
     common::dbus_get_managed_objects(conn,
                                      "/",
                                      ADAPTER_INTERFACE,
-                                     |conn, obj_path| Adapter { conn: conn, object_path: obj_path.to_string() }
+                                     |conn, obj_path| Adapter { conn: conn.clone(), object_path: obj_path.to_string() }
     )
 }
 
-pub fn find_adapter(conn: Rc<dbus::Connection>, name_or_addr: Option<&str>) -> Result<Option<Adapter>, BtError> {
+pub fn find_adapter(conn: &super::Connection, name_or_addr: Option<&str>) -> Result<Option<Adapter>, BtError> {
     let adapters = try!(get_adapters(conn));
 
     if let Some(name_or_addr) = name_or_addr {
